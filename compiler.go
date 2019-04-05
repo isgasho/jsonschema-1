@@ -116,7 +116,7 @@ func (c *Compiler) Compile(url string) (*Schema, error) {
 	if _, ok := c.resources[base]; !ok {
 		r, err := loader.Load(base)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("looking up %q: %v", base, err)
 		}
 		defer r.Close()
 		if err := c.AddResource(base, r); err != nil {
