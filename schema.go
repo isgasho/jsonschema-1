@@ -17,6 +17,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/decoders"
 	"github.com/santhosh-tekuri/jsonschema/formats"
+	"github.com/santhosh-tekuri/jsonschema/loader"
 	"github.com/santhosh-tekuri/jsonschema/mediatypes"
 )
 
@@ -271,6 +272,26 @@ func (s *Schema) validate(v interface{}) error {
 
 	switch v := v.(type) {
 	case map[string]interface{}:
+		if ref, ok := v["$ref"].(string); ok {
+			base, fragment := split(ref)
+			if fragment != "#" {
+				panic(fmt.Errorf("unsupported $ref containing non-# fragment: %q", ref))
+			}
+			r, err := loader.Load(base)
+			if err != nil {
+				return validationError("$ref", "looking up referenced document %q failed: %v", ref, err)
+			}
+			defer r.Close()
+			doc, err := DecodeJSON(r)
+			if err != nil {
+				return validationError("$ref", "parsing referenced document %q failed: %v", ref, err)
+			}
+			v, ok = doc.(map[string]interface{})
+			if !ok {
+				return validationError("$ref", "referenced document is not a map: %q", ref)
+			}
+		}
+
 		if s.MinProperties != -1 && len(v) < s.MinProperties {
 			return validationError("minProperties", "minimum %d properties allowed, but found %d properties", s.MinProperties, len(v))
 		}

@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema"
 	_ "github.com/santhosh-tekuri/jsonschema/httploader"
+	"github.com/santhosh-tekuri/jsonschema/loader"
 )
 
 var draft4, draft6, draft7 []byte
@@ -461,4 +464,86 @@ func TestPanic(t *testing.T) {
 		t.Error("no error expected")
 		return
 	}
+}
+
+type refLoader map[string]string
+
+func (r refLoader) Load(url string) (io.ReadCloser, error) {
+	b, ok := r[url]
+	if ok {
+		return ioutil.NopCloser(strings.NewReader(b)), nil
+	}
+	return nil, fmt.Errorf("not found: %q", url)
+}
+
+func TestFollowRefsWhenValidating(t *testing.T) {
+	loader.Register("ref", refLoader{
+		"ref://other/doc": `{"url": "http://path/to/image"}`,
+		"ref://bad/doc":   `{"description": "some text"}`,
+	})
+
+	compiler := jsonschema.NewCompiler()
+
+	err := compiler.AddResource("schema.json", strings.NewReader(`
+{
+  "properties": {
+    "image": {
+      "properties": {
+        "url": { "type": "string", "format": "uri" }
+      },
+      "required": ["url"]
+    }
+  },
+  "required": ["image"]
+}
+`))
+	if err != nil {
+		t.Fatalf("addResource failed. reason: %v\n", err)
+	}
+
+	schema, err := compiler.Compile("schema.json")
+	if err != nil {
+		t.Fatalf("schema compilation failed. reason: %v\n", err)
+	}
+
+	t.Run("ref doc satisfies", func(t *testing.T) {
+		err = schema.Validate(bytes.NewReader([]byte(`
+{
+  "image": {
+    "$ref": "ref://other/doc"
+  }
+}
+`)))
+		if err != nil {
+			t.Fatalf("failed to validate doc with $ref: %v", err)
+		}
+	})
+
+	t.Run("ref doc does not satisfy", func(t *testing.T) {
+		err = schema.Validate(bytes.NewReader([]byte(`
+{
+  "image": {
+    "$ref": "ref://bad/doc"
+  }
+}
+`)))
+		t.Log(err)
+		if err == nil {
+			t.Fatalf("expected validation failure: %v", err)
+		}
+	})
+
+	t.Run("ref doc not found", func(t *testing.T) {
+		err = schema.Validate(bytes.NewReader([]byte(`
+{
+  "image": {
+    "$ref": "ref://not/found"
+  }
+}
+`)))
+		t.Log(err)
+		if err == nil {
+			t.Fatalf("expected validation failure: %v", err)
+		}
+	})
 }
